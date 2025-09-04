@@ -45,7 +45,7 @@ export default function OllamaChat() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const response = await fetch("http://localhost:11434/api/tags")
+        const response = await fetch("/api/ollama/tags")
         if (response.ok) {
           const data = await response.json()
           setAvailableModels(data.models || [])
@@ -78,7 +78,7 @@ export default function OllamaChat() {
     setIsLoading(true)
 
     try {
-      const response = await fetch("http://localhost:11434/api/generate", {
+      const response = await fetch("/api/ollama/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
