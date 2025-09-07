@@ -1,60 +1,41 @@
 import { NextResponse } from "next/server"
 
 export async function GET() {
-  const baseUrl =
-    process.env.NODE_ENV === "production"
-      ? `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}`
-      : "http://localhost:3000"
+  const ollamaUrls = ["http://127.0.0.1:11434", "http://localhost:11434", process.env.OLLAMA_URL].filter(Boolean)
 
-  try {
-    console.log("[v0] Fetching models via nginx proxy...")
-
-    const response = await fetch(`${baseUrl}/api/ollama/tags-proxy`, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(5000),
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const data = await response.json()
-    console.log("[v0] Successfully fetched models via proxy")
-    return NextResponse.json(data)
-  } catch (error) {
-    console.log("[v0] Proxy connection failed, trying direct connection...")
-
-    // Fallback to direct connection for development
-    const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
-
+  for (const url of ollamaUrls) {
     try {
-      const response = await fetch(`${ollamaUrl}/api/tags`, {
+      console.log(`[v0] Trying to connect to Ollama at ${url}...`)
+
+      const response = await fetch(`${url}/api/tags`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
         },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(10000),
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        console.log(`[v0] HTTP ${response.status} from ${url}`)
+        continue
       }
 
       const data = await response.json()
+      console.log(`[v0] Successfully connected to Ollama at ${url}`)
       return NextResponse.json(data)
-    } catch (directError) {
-      console.log("[v0] Direct connection also failed:", directError)
-      return NextResponse.json(
-        {
-          error: "Cannot connect to Ollama",
-          suggestion: "Configure nginx proxy: location /api/ollama/ { proxy_pass http://127.0.0.1:11434/api/; }",
-          models: [],
-        },
-        { status: 500 },
-      )
+    } catch (error) {
+      console.log(`[v0] Failed to connect to ${url}:`, error.message)
+      continue
     }
   }
+
+  // If all connections failed
+  return NextResponse.json(
+    {
+      error: "Cannot connect to Ollama",
+      suggestion: "Make sure Ollama is running and accessible. Try: curl http://localhost:11434/api/tags",
+      models: [],
+    },
+    { status: 500 },
+  )
 }

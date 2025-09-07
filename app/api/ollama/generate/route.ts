@@ -5,74 +5,60 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     console.log(`[v0] Generating response with model: ${body.model}`)
 
-    const baseUrl =
-      process.env.NODE_ENV === "production"
-        ? `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}`
-        : "http://localhost:3000"
+    const ollamaUrls = ["http://127.0.0.1:11434", "http://localhost:11434", process.env.OLLAMA_URL].filter(Boolean)
 
-    try {
-      console.log("[v0] Attempting generation via nginx proxy...")
+    for (const url of ollamaUrls) {
+      try {
+        console.log(`[v0] Trying to generate via ${url}...`)
 
-      const response = await fetch(`${baseUrl}/api/ollama/generate-proxy`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...body,
-          stream: true,
-        }),
-        signal: AbortSignal.timeout(30000),
-      })
+        const response = await fetch(`${url}/api/generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ...body,
+            stream: true,
+          }),
+          signal: AbortSignal.timeout(30000),
+        })
 
-      if (!response.ok) {
-        throw new Error(`Proxy responded with status ${response.status}`)
+        if (!response.ok) {
+          console.log(`[v0] HTTP ${response.status} from ${url}`)
+          continue
+        }
+
+        console.log(`[v0] Successfully connected to Ollama at ${url}`)
+        return new Response(response.body, {
+          headers: {
+            "Content-Type": "text/plain",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        })
+      } catch (error) {
+        console.log(`[v0] Failed to connect to ${url}:`, error.message)
+        continue
       }
-
-      // Forward the streaming response
-      return new Response(response.body, {
-        headers: {
-          "Content-Type": "text/plain",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      })
-    } catch (proxyError) {
-      console.log("[v0] Proxy failed, trying direct connection:", proxyError)
-
-      // Fallback to direct connection
-      const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
-
-      const response = await fetch(`${ollamaUrl}/api/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...body,
-          stream: true,
-        }),
-        signal: AbortSignal.timeout(30000),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Direct connection failed with status ${response.status}`)
-      }
-
-      return new Response(response.body, {
-        headers: {
-          "Content-Type": "text/plain",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      })
     }
+
+    // If all connections failed
+    return new Response(
+      JSON.stringify({
+        error: "Failed to generate response from Ollama",
+        suggestion: "Make sure Ollama is running and accessible. Try: curl http://localhost:11434/api/tags",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      },
+    )
   } catch (error) {
     console.error("Failed to generate response:", error)
     return new Response(
       JSON.stringify({
         error: "Failed to generate response from Ollama",
-        suggestion: "Ensure nginx proxy is configured and Ollama is running",
+        suggestion: "Ensure Ollama is running and accessible",
       }),
       {
         status: 500,
