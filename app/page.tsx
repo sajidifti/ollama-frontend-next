@@ -10,12 +10,14 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Send, Bot, User, Trash2 } from "lucide-react"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
 
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   timestamp: Date
+  isStreaming?: boolean
 }
 
 interface OllamaModel {
@@ -45,23 +47,35 @@ export default function OllamaChat() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
+        console.log("[v0] Checking Ollama connection...")
         const response = await fetch("/api/ollama/tags")
-        if (response.ok) {
-          const data = await response.json()
-          setAvailableModels(data.models || [])
+        const data = await response.json()
+
+        console.log("[v0] API response:", data)
+
+        if (response.ok && data.models && data.models.length > 0) {
+          setAvailableModels(data.models)
           setIsConnected(true)
-          if (data.models && data.models.length > 0) {
+          if (!selectedModel) {
             setSelectedModel(data.models[0].name)
+            console.log("[v0] Auto-selected model:", data.models[0].name)
           }
+        } else {
+          console.log("[v0] No models found or API error:", data.error || "Unknown error")
+          setIsConnected(false)
+          setAvailableModels([])
         }
       } catch (error) {
         console.log("[v0] Ollama connection failed:", error)
         setIsConnected(false)
+        setAvailableModels([])
       }
     }
 
     checkConnection()
-  }, [])
+    const interval = setInterval(checkConnection, 30000)
+    return () => clearInterval(interval)
+  }, [selectedModel])
 
   const sendMessage = async () => {
     if (!input.trim() || !selectedModel || isLoading) return
@@ -74,8 +88,19 @@ export default function OllamaChat() {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const currentInput = input.trim()
     setInput("")
     setIsLoading(true)
+
+    const assistantMessageId = (Date.now() + 1).toString()
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+      isStreaming: true,
+    }
+    setMessages((prev) => [...prev, assistantMessage])
 
     try {
       const response = await fetch("/api/ollama/generate", {
@@ -85,32 +110,58 @@ export default function OllamaChat() {
         },
         body: JSON.stringify({
           model: selectedModel,
-          prompt: input.trim(),
-          stream: false,
+          prompt: currentInput,
+          stream: true,
         }),
       })
 
-      if (response.ok) {
-        const data = await response.json()
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: data.response,
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, assistantMessage])
-      } else {
+      if (!response.ok) {
         throw new Error("Failed to get response from Ollama")
       }
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let accumulatedContent = ""
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          const lines = chunk.split("\n").filter((line) => line.trim())
+
+          for (const line of lines) {
+            try {
+              const data = JSON.parse(line)
+              if (data.response) {
+                accumulatedContent += data.response
+                // Update the message in real-time
+                setMessages((prev) =>
+                  prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: accumulatedContent } : msg)),
+                )
+              }
+            } catch (e) {
+              // Skip invalid JSON lines
+            }
+          }
+        }
+      }
+
+      setMessages((prev) => prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, isStreaming: false } : msg)))
     } catch (error) {
       console.log("[v0] Error sending message:", error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "Sorry, I encountered an error. Please make sure Ollama is running on localhost:11434.",
-        timestamp: new Date(),
-      }
-      setMessages((prev) => [...prev, errorMessage])
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: "Sorry, I encountered an error. Please make sure Ollama is running on localhost:11434.",
+                isStreaming: false,
+              }
+            : msg,
+        ),
+      )
     } finally {
       setIsLoading(false)
     }
@@ -199,7 +250,19 @@ export default function OllamaChat() {
                       message.role === "user" ? "bg-primary text-primary-foreground" : "bg-card text-card-foreground"
                     }`}
                   >
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</div>
+                    {message.role === "assistant" ? (
+                      <MarkdownRenderer content={message.content} />
+                    ) : (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</div>
+                    )}
+
+                    {message.isStreaming && (
+                      <div className="flex items-center gap-2 mt-2 text-xs opacity-70">
+                        <div className="animate-pulse">●</div>
+                        <span>Streaming...</span>
+                      </div>
+                    )}
+
                     <div
                       className={`text-xs mt-2 opacity-70 ${
                         message.role === "user" ? "text-primary-foreground" : "text-muted-foreground"
@@ -269,9 +332,9 @@ export default function OllamaChat() {
 
             {!isConnected && (
               <div className="mt-3 p-3 bg-destructive/10 border border-destructive/20 rounded-md">
-                <p className="text-sm text-destructive">
+                <p className="text-sm text-destructive-foreground">
                   <strong>Connection Error:</strong> Unable to connect to Ollama. Make sure Ollama is running with:{" "}
-                  <code className="bg-destructive/20 px-1 rounded">ollama serve</code>
+                  <code className="bg-destructive/30 px-1 rounded text-destructive-foreground">ollama serve</code>
                 </p>
               </div>
             )}
